@@ -5,17 +5,20 @@ data: "May 14, 2020"
 output: html_notebook
 ---
 
-In this project, I will analyze data from the New York City school department to understand whether parent, teacher, and student perception of the following factors affect average school SAT scores (an indicator of academic performace):
+In this project, I will first analyze data from the New York City school department to learn about the characteristics of schools, and try to understand how NYC high schools' demographics (race, sex, income, etc.) affect how well students perform academically.
+Then I will use other information try to understand whether parent, teacher, and student perception of the following factors affect average school SAT scores (an indicator of academic performace):
 
 1. Safety
 2. Engagement
 3. Comminication
 4. Academics
 
+The first section of the data can be found [here](https://data.cityofnewyork.us/Education/2012-SAT-Results/f9bf-2cp4)
+
 The data, collected in 2011, are publicly available and can be accessed [here](https://data.cityofnewyork.us/Education/2011-NYC-School-Survey/mnz3-dyi8).
 The combined data of NYC school can be found [here](https://data.world/dataquest/nyc-schools-data).
 
-I'll start by installing the pakages that I'll need for this analysis and set my working directory:
+I'll start by installing the pakages that I'll need for this analysis:
 
 ```{r}
 library(readr)
@@ -26,38 +29,194 @@ library(tidyr)
 library(ggplot2)
 ```
 
-I'll now import the dataset into R
 
+### Section 1: 
+
+Let's first import datasets into R
+```{r}
+sat_results <- read_csv("sat_results.csv")
+ap_2010 <- read_csv("ap_2010.csv")
+class_size <- read_csv("class_size.csv")
+demographics <- read_csv("demographics.csv")
+graduation <- read_csv("graduation.csv")
+hs_directory <- read_csv("hs_directory.csv")
+```
+
+
+Modify the sat_results file to change from character variable to numeric variable
+```{r}
+sat_results <- sat_results %>%
+    mutate(`Num of SAT Test Takers` = as.numeric(`Num of SAT Test Takers`), 
+        `SAT Writing Avg. Score` = as.numeric(`SAT Writing Avg. Score`),
+        `SAT Critical Reading Avg. Score` = as.numeric(`SAT Critical Reading Avg. Score`), 
+        `SAT Math Avg. Score` = as.numeric(`SAT Math Avg. Score`)) %>%
+    mutate(avg_sat_score = `SAT Critical Reading Avg. Score` + `SAT Math Avg. Score` + `SAT Writing Avg. Score`)
+```
+
+
+Modify the ap_2010 file to change from character variable to numeric variable and add new variable that would be helpful for further analysis
+```{r}
+ap_2010 <- ap_2010 %>%
+    mutate_at(3:5, as.numeric) %>%
+    mutate(exams_per_student = `Total Exams Taken` / `AP Test Takers`, high_score_percent = `Number of Exams with scores 3 4 or 5` / `Total Exams Taken` * 100)
+```
+
+
+Since we only interested for high school students, we can filter to only have grade 9-12 and only have general education for class_size file
+```{r}
+class_size <- class_size %>%
+    filter((`GRADE` == "09-12") & (`PROGRAM TYPE` == "GEN ED"))
+
+# we also want to see an average of certain variables
+class_size <- class_size %>%
+    group_by(CSD, `SCHOOL CODE`, `SCHOOL NAME`) %>%
+    summarize(avg_class_size = mean(`AVERAGE CLASS SIZE`), avg_largest_class = mean(`SIZE OF LARGEST CLASS`), avg_smallest_class = mean(`SIZE OF SMALLEST CLASS`))
+
+# since we would like a "key" variable in each data file so that in the future we can combine them all together, we create a "DBN" variable in this case
+class_size <- class_size %>%
+    mutate(DBN = str_c(CSD, `SCHOOL CODE`)) %>%
+    mutate(DBN = str_pad(DBN, width = 6, side = "left", pad = "0"))
+```
+
+
+Now, let's modify graduation file to only have variables we want
+```{r}
+graduation <- graduation %>%
+    filter(Demographic == "Total Cohort" & Cohort == "2006") %>%
+    select(DBN, `School Name`, `Total Grads - % of cohort`, `Dropped Out - % of cohort`)
+```
+
+
+Next, let's change the demographics file
+```{r}
+demographics <- demographics %>%
+    filter(schoolyear == "20112012" & grade9 != "NA") %>%
+    select(DBN, Name, frl_percent, total_enrollment, ell_percent, sped_percent, asian_per, black_per, hispanic_per, white_per, male_per, female_per)
+
+demographics_clean <- demographics %>%
+    select(-female_per, -Name)
+```
+
+
+Finally, let's change the hs_directory file
+```{r}
+demographics_clean <- demographics %>%
+    select(-female_per, -Name)
+
+# there is an duplicate DBN in the ap_2010 file, remove that
+ap_2010 <- ap_2010 %>%
+    filter(SchoolName != "YOUNG WOMEN'S LEADERSHIP SCH")
+```
+
+
+Now we have 6 clean dataset for us to work with, but we still need to do some string manipulation for some dataset.
+```{r}
+graduation <- graduation %>%
+    mutate_at(vars(3:4), parse_number)
+
+# we would like to extract coordinates from a variable
+hs_directory <- hs_directory %>%
+    mutate(lat_long = str_split(`Location 1`, "\n", simplify = TRUE)[, 3])
+
+hs_directory <- hs_directory %>%
+    mutate(lat = str_split(lat_long, ",", simplify = TRUE)[,1], long = str_split(lat_long, ",", simplify = TRUE)[,2])
+
+hs_directory <- hs_directory %>%
+    mutate(lat = str_sub(lat, 2, -1), long = str_sub(long, 1, -2)) %>%
+    mutate_at(vars(lat,long), as.numeric)
+```
+
+
+Let's combine the 6 files into one
+```{r}
+combined <- sat_results %>%
+    full_join(ap_2010, by = "DBN") %>%
+    left_join(class_size, by = "DBN") %>%
+    left_join(demographics, by = "DBN") %>%
+    left_join(graduation, by = "DBN") %>%
+    left_join(hs_directory, by = "DBN")
+```
+
+
+
+#### **Combined analysis**
+```{r}
+combined_race <- read_csv("combined_race.csv")
+```
+
+
+First of all, let's see some relationship between different variables with the avg_sat_score
+```{r}
+ggplot(data = combined_race) +
+    aes(x = frl_percent, y = avg_sat_score) +
+    geom_point()
+
+ggplot(data = combined_race) +
+    aes(x = ell_percent, y = avg_sat_score) +
+    geom_point()
+
+ggplot(data = combined_race) +
+    aes(x = sped_percent, y = avg_sat_score) +
+    geom_point()
+```
+
+
+
+We want to see how race play a role in the academic performance
+```{r}
+combined_race_longer <- combined_race %>%
+    pivot_longer(cols = c(asian_per, black_per, hispanic_per, white_per), names_to = "race", values_to = "percent")
+
+ggplot(data = combined_race_longer) +
+    aes(x = percent, y = avg_sat_score, color = race) +
+    geom_point()
+```
+
+
+
+There are some overlapping points and hard to see, so we can use facet to seperate them
+```{r}
+ggplot(data = combined_race_longer) +
+  aes(x = percent, y = avg_sat_score, color = race) +
+  geom_point() +
+  facet_wrap(~race)
+```
+As we can see through the graph, as the asian and white percent increase, there is an increase in the academic performance, however, for black and hispanic, there is a reverse effect, this may be explained by the **existence of pervasive inequalities** in how resources are allocated to schools with a high number of black and hispanic students. Such schools are **less likely** to have experienced teacher, advanced courses, and high-quality instructional materials that help prepare students for the SAT.
+
+
+### Section 2: 
+
+I'll now import the combined dataset and two other survey datasets into R
 ```{r}
 combined <- read.csv("combined.csv")
 survey <- read_tsv("masterfile11_gened_final.txt")
 survey_d75 <- read_tsv("masterfile11_d75_final.txt")
 ```
 
-Not all the information are needed for our analysis, therefore, we will only obtain variables that is important for us, for this session, we will keep only High School info.
 
+Not all the information are needed for our analysis, therefore, we will only obtain variables that is important for us, for this session, we will keep only High School info.
 ```{r}
 survey_select <- survey %>%
   filter(schooltype == "High School") %>%
   select(dbn:aca_tot_11)
 ```
 
-Select columns needed for analysis from survey_d75.
 
+Select columns needed for analysis from survey_d75.
 ```{r}
 survey_d75_select <- survey_d75 %>%
   select(dbn:aca_tot_11)
 ```
 
-Combine survey and survey_d75 together
 
+Combine survey and survey_d75 together
 ```{r}
 survey_total <- survey_select %>%
   bind_rows(survey_d75_select)
 ```
 
-Now we want to combine the survey_total with our original combined dataset together, but first, we need to change the "key" name in survey_total from "dbn" to "DBN"
 
+Now we want to combine the survey_total with our original combined dataset together, but first, we need to change the "key" name in survey_total from "dbn" to "DBN"
 ```{r}
 survey_total <- survey_total %>%
   rename(DBN = dbn)
@@ -69,30 +228,29 @@ combined_survey <- combined %>%
 
 
 As we are trying to find out the "do student, teacher, and parent perceptions of NYC school quality appear to be related to demographic and academic success metric", we can use a correlation matrix to find out the relationships between pairs of variables.
-
 ```{r}
 cor_mat <- combined_survey %>%
   select(avg_sat_score, saf_p_11:aca_tot_11) %>%
   cor(use = "pairwise.complete.obs")
 ```
 
-In order to better filter out the strong relationship, we can convert this matrix to a tibble
 
+In order to better filter out the strong relationship, we can convert this matrix to a tibble
 ```{r}
 cor_tib <- cor_mat %>%
   as_tibble(rownames = "variable")
 ```
 
-We now trying to find correlations of other variables with `avg_sat_score` that are greater than 0.25 or less than -0.25 (strong correlation).
 
+We now trying to find correlations of other variables with `avg_sat_score` that are greater than 0.25 or less than -0.25 (strong correlation).
 ```{r}
 strong_cors <- cor_tib %>%
   select(variable, avg_sat_score) %>%
   filter(avg_sat_score > 0.25 | avg_sat_score < -0.25)
 ```
 
-To visually explore the relationship, I will create scatter plots to demonstrate.
 
+To visually explore the relationship, I will create scatter plots to demonstrate.
 ```{r}
 # create a function for the scatter plot
 create_scatter <- function(x, y) {
@@ -110,13 +268,13 @@ map2(x_var, y_var, create_scatter)
 
 
 It would be interesting to see whether parents, students, and teachers have similar perceptions about the four school quality metrics they were surveyd about:
-Safety and Respect
-Communication
-Engagement
-Academic Expectation
+1. Safety and Respect
+2. Communication
+3. Engagement
+4. Academic Expectation
+
 
 We first reshape the data so we can investigate differences in student, parent and teacher responses to survey questions.
-
 ```{r}
 combined_survey_gather <- combined_survey %>%
   gather(key = "survey_question", value = score, saf_p_11:aca_tot_11)
@@ -131,8 +289,8 @@ combined_survey_gather <- combined_survey_gather %>%
   mutate(response_type = ifelse(response_type == "_p_", "parent", ifelse(response_type == "_t_", "teacher", ifelse(response_type == "_s_", "student", ifelse(response_type == "_to_", "total", "NA")))))
 ```
 
-Finally, make a boxplot to see if there appear to be differences in how the three groups of responders answered the four questions.
 
+Finally, make a boxplot to see if there appear to be differences in how the three groups of responders answered the four questions.
 ```{r}
 combined_survey_gather %>%
   filter(response_type != "total", ) %>%
